@@ -3119,20 +3119,28 @@ async function joinRoom(n){
     const list=[];keys.forEach(k=>{if(k===TAB)return;const metas=st[k];const m=metas[metas.length-1];list.push({peer:k,presence:m})});
     applyPeers(list);
   });
-  ch.subscribe(status=>{if(status==="SUBSCRIBED"){rt.room=ch;lastSig="";sendPresence(true);renderHud()}});
-  rt.chan=ch;
+  ch.subscribe((status,err)=>{rt.chStatus=status+(err&&err.message?" ("+err.message+")":"");
+    if(status==="SUBSCRIBED"){rt.room=ch;lastSig="";sendPresence(true);renderHud()}
+    else if((status==="CHANNEL_ERROR"||status==="TIMED_OUT"||status==="CLOSED")&&rt.chan===ch){rt.room=null;rt.retry=(rt.retry||0)+1;setTimeout(()=>{if(rt.chan===ch)joinRoom(n)},Math.min(15000,2000*rt.retry))}});
+  rt.chan=ch;rt.chStatus="연결 중";
 }
+// 연결 점검 창: 주소 끝에 #diag 를 붙이면 보임
+function showDiag(){
+  const d=document.createElement("div");d.id="diag";d.style.cssText="position:fixed;left:8px;top:8px;z-index:99;background:#000c;color:#fff;font:12px/1.5 monospace;padding:8px 10px;border-radius:8px;max-width:92vw;white-space:pre-wrap;pointer-events:none";document.body.appendChild(d);
+  setInterval(()=>{d.textContent=["[연결 점검]","supabase-js: "+(window.supabase?"OK":"불러오기 실패"),"로그인: "+(rt.uid?"OK "+String(rt.uid).slice(0,8):"없음")+(rt.authErr?" / 오류: "+rt.authErr:""),"DB: "+(rt.dbErr?"오류: "+rt.dbErr:(rt.uid?"OK":"-")),"실시간: "+(rt.chStatus||"시작 안 함")+" · 제"+(rt.roomNo||"-")+"법당","함께 보이는 사람: "+rt.peers.size+"명","내 탭: "+TAB].join("\n")},1000);
+}
+if(location.hash==="#diag")setTimeout(showDiag,500);
 async function initRuntime(){
-  if(!window.supabase)return;
+  if(!window.supabase){rt.chStatus="supabase-js 없음";return}
   const sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true}});rt.sb=sb;
   try{
     let {data}=await sb.auth.getSession();let session=data&&data.session;
-    if(!session){const r=await sb.auth.signInAnonymously();session=r.data&&r.data.session}
+    if(!session){const r=await sb.auth.signInAnonymously();session=r.data&&r.data.session;if(r.error)rt.authErr=r.error.message}
     rt.uid=session&&session.user?session.user.id:null;
     if(rt.uid){const {data:oid,error:oe}=await sb.rpc("owner_id");if(!oe&&oid)rt.uid=String(oid)}
-  }catch(e){}
+  }catch(e){rt.authErr=String(e&&e.message||e)}
   if(rt.uid){
-    try{const {data}=await sb.from("devotees").select("*").eq("id",rt.uid).maybeSingle();
+    try{const {data,error:de}=await sb.from("devotees").select("*").eq("id",rt.uid).maybeSingle();rt.dbErr=de?de.message:"";
       if(data&&data.name){syncFromRow(data);if(data.name!==me.name){setMyName(data.name)}else relabel(player,myLabel());}
       else await serverProfile();
     }catch(e){}
